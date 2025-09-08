@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"time"
@@ -41,6 +42,11 @@ type Config struct {
 	RateLimitRequests int
 	RateLimitWindow   time.Duration
 	SessionTimeout    time.Duration
+	AccountLockoutDuration time.Duration
+	MaxFailedAttempts      int
+	PasswordComplexity     bool
+	CSRFProtection         bool
+	RequestTimeout         time.Duration
 }
 
 func Load() *Config {
@@ -70,10 +76,15 @@ func Load() *Config {
 		SMTPPassword: getEnv("SMTP_PASS", ""),
 		EmailFrom:    getEnv("EMAIL_FROM", "noreply@example.com"),
 
-		BcryptCost:        getEnvAsInt("BCRYPT_COST", 12),
-		RateLimitRequests: getEnvAsInt("RATE_LIMIT_REQUESTS", 10),
-		RateLimitWindow:   getEnvAsDuration("RATE_LIMIT_WINDOW", "1m"),
-		SessionTimeout:    getEnvAsDuration("SESSION_TIMEOUT", "30m"),
+		BcryptCost:             getEnvAsInt("BCRYPT_COST", 12),
+		RateLimitRequests:      getEnvAsInt("RATE_LIMIT_REQUESTS", 10),
+		RateLimitWindow:        getEnvAsDuration("RATE_LIMIT_WINDOW", "1m"),
+		SessionTimeout:         getEnvAsDuration("SESSION_TIMEOUT", "30m"),
+		AccountLockoutDuration: getEnvAsDuration("ACCOUNT_LOCKOUT_DURATION", "30m"),
+		MaxFailedAttempts:      getEnvAsInt("MAX_FAILED_ATTEMPTS", 5),
+		PasswordComplexity:     getEnvAsBool("PASSWORD_COMPLEXITY", true),
+		CSRFProtection:         getEnvAsBool("CSRF_PROTECTION", true),
+		RequestTimeout:         getEnvAsDuration("REQUEST_TIMEOUT", "30s"),
 	}
 }
 
@@ -101,4 +112,24 @@ func getEnvAsDuration(key string, defaultValue string) time.Duration {
 	}
 	duration, _ := time.ParseDuration(defaultValue)
 	return duration
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return value == "true" || value == "1"
+	}
+	return defaultValue
+}
+
+func (c *Config) Validate() error {
+	if c.JWTSecret == "your-secret-key" {
+		return errors.New("JWT_SECRET must be changed from default")
+	}
+	if c.BcryptCost < 10 {
+		return errors.New("BCRYPT_COST must be at least 10")
+	}
+	if c.RateLimitRequests < 1 {
+		return errors.New("RATE_LIMIT_REQUESTS must be positive")
+	}
+	return nil
 }

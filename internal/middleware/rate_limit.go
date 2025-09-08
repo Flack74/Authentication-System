@@ -14,36 +14,63 @@ func RateLimit(redisClient *redis.Client, requests int, window time.Duration) gi
 	return func(c *gin.Context) {
 		ctx := context.Background()
 		clientIP := c.ClientIP()
-		key := fmt.Sprintf("rate_limit:%s", clientIP)
+		key := fmt.Sprintf("rate_limit:ip:%s", clientIP)
 
-		// Get current count
-		current, err := redisClient.Get(ctx, key).Int()
-		if err != nil && err != redis.Nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Rate limit check failed"})
-			c.Abort()
-			return
-		}
-
-		if current >= requests {
+		// Check IP-based rate limit
+		if !checkRateLimit(ctx, redisClient, key, requests, window) {
 			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error": "Rate limit exceeded",
+				"error": "Rate limit exceeded for IP",
 				"retry_after": window.Seconds(),
 			})
 			c.Abort()
 			return
 		}
 
-		// Increment counter
-		pipe := redisClient.Pipeline()
-		pipe.Incr(ctx, key)
-		pipe.Expire(ctx, key, window)
-		_, err = pipe.Exec(ctx)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Rate limit update failed"})
+		// Check user-based rate limit if authenticated
+		if userID, exists := c.Get("userID"); exists {
+			userKey := fmt.Sprintf("rate_limit:user:%v", userID)
+			if !checkRateLimit(ctx, redisClient, userKey, requests*2, window) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"error": "Rate limit exceeded for user",
+					"retry_after": window.Seconds(),
+				})
+				c.Abort()
+				return
+			}
+		}
+
+		c.Next()
+	}
+}
+
+func checkRateLimit(ctx context.Context, redisClient *redis.Client, key string, limit int, window time.Duration) bool {
+	current, err := redisClient.Get(ctx, key).Int()
+	if err != nil && err != redis.Nil {
+		return false
+	}
+
+	if current >= limit {
+		return false
+	}
+
+	// Increment counter with sliding window
+	pipe := redisClient.Pipeline()
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, window)
+	_, err = pipe.Exec(ctx)
+	return err == nil
+}
+
+func RequestSizeLimit(maxSize int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.ContentLength > maxSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error": "Request body too large",
+				"max_size": maxSize,
+			})
 			c.Abort()
 			return
 		}
-
 		c.Next()
 	}
 }

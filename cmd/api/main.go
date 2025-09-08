@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -52,7 +53,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService)
 
 	// Setup routes
-	router := setupRouter(cfg, authHandler, tokenService, redisClient)
+	router := setupRouter(cfg, authHandler, tokenService, redisClient, db)
 
 	// Start server
 	srv := &http.Server{
@@ -86,19 +87,30 @@ func main() {
 	log.Println("Server exited")
 }
 
-func setupRouter(cfg *config.Config, authHandler *handlers.AuthHandler, tokenService *services.TokenService, redisClient *redis.Client) *gin.Engine {
+func setupRouter(cfg *config.Config, authHandler *handlers.AuthHandler, tokenService *services.TokenService, redisClient *redis.Client, db *sql.DB) *gin.Engine {
 	router := gin.Default()
 
 	// Global middleware
+	router.Use(middleware.CorrelationID())
+	router.Use(middleware.StructuredLogging())
+	router.Use(middleware.RequestTimeout())
+	router.Use(middleware.ErrorHandler())
+	router.Use(middleware.ValidationErrorHandler())
+	router.Use(middleware.InputValidation())
 	router.Use(middleware.CORS())
 	router.Use(middleware.SecureHeaders())
-	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
+	router.Use(middleware.RequestSizeLimit(1024*1024)) // 1MB limit
+	
+	// CSRF protection for non-API routes
+	if cfg.CSRFProtection {
+		router.Use(middleware.CSRF(redisClient))
+	}
 
-	// Health check
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
-	})
+	// Health checks
+	healthHandler := handlers.NewHealthHandler(db, redisClient)
+	router.GET("/health", healthHandler.HealthCheck)
+	router.GET("/health/ready", healthHandler.ReadinessCheck)
+	router.GET("/health/live", healthHandler.LivenessCheck)
 
 	// Auth routes
 	auth := router.Group("/auth")

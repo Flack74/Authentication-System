@@ -37,20 +37,22 @@
 This authentication system follows clean architecture principles with clear separation of concerns:
 
 ```
-go-auth-system/
+Authentication_System/
 ├── cmd/api/                    # Application entry point
 ├── internal/                   # Private application code
 │   ├── config/                 # Configuration management
 │   ├── databases/              # Database connections
-│   ├── handlers/               # HTTP request handlers
-│   ├── middleware/             # HTTP middleware
+│   ├── handlers/               # HTTP request handlers (auth + health)
+│   ├── middleware/             # HTTP middleware (auth, CORS, CSRF, logging)
 │   ├── models/                 # Data models and DTOs
 │   ├── repository/             # Data access layer
 │   ├── services/               # Business logic layer
 │   └── utils/                  # Utility functions
-├── migrations/                 # Database migrations
-├── docker/                     # Docker configuration
+├── migrations/                 # Database migrations with indexes
+├── tests/                      # Integration and unit tests
+├── docs/screenshots/           # Documentation screenshots
 ├── docker-compose.yml          # Multi-container setup
+├── Makefile                    # Build automation
 └── README.md                   # This file
 ```
 
@@ -65,12 +67,15 @@ go-auth-system/
 - **Password Reset** via email with time-limited tokens
 
 ### Security Features
-- **Rate Limiting** per IP using Redis sliding window
-- **Account Lockout** after failed login attempts
+- **Rate Limiting** per IP and per user using Redis sliding window
+- **Account Lockout** after configurable failed login attempts
 - **CORS Protection** with configurable origins
-- **Security Headers** (HSTS, CSP, XSS Protection)
-- **Input Validation** and sanitization
-- **SQL Injection Protection** via prepared statements
+- **CSRF Protection** with Redis-based token validation
+- **Security Headers** (HSTS, CSP, XSS Protection, X-Frame-Options)
+- **Input Validation** with SQL injection and XSS prevention
+- **Password Complexity** rules (uppercase, lowercase, digit, special char)
+- **Request Size Limiting** and timeout handling
+- **Structured Logging** with correlation IDs for security auditing
 
 ### Infrastructure
 - **PostgreSQL** for persistent data storage
@@ -183,7 +188,9 @@ go run cmd/api/main.go
 | Method | Endpoint | Description | Auth Required |
 |--------|----------|-------------|---------------|
 | `GET` | `/api/profile` | Get user profile | ✅ |
-| `GET` | `/health` | Health check | ❌ |
+| `GET` | `/health` | Comprehensive health check | ❌ |
+| `GET` | `/health/ready` | Readiness probe | ❌ |
+| `GET` | `/health/live` | Liveness probe | ❌ |
 
 ### Request/Response Examples
 
@@ -415,61 +422,79 @@ func (s *EmailService) SendVerificationEmail(email, token string) error {
 
 ### 6. Middleware (`internal/middleware/`)
 
-#### Authentication Middleware
+#### Comprehensive Middleware Stack
 ```go
-func Auth(tokenService *services.TokenService) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        // 1. Extract Bearer token from Authorization header
-        authHeader := c.GetHeader("Authorization")
-        tokenParts := strings.Split(authHeader, " ")
-        
-        // 2. Validate token format
-        if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
-            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization header format"})
-            c.Abort()
-            return
-        }
-        
-        // 3. Validate JWT token
-        userID, err := tokenService.ValidateAccessToken(tokenParts[1])
-        if err != nil {
-            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
-            c.Abort()
-            return
-        }
-        
-        // 4. Set user context
-        c.Set("userID", userID)
-        c.Set("token", tokenParts[1])
-        c.Next()
-    }
-}
+// Global middleware applied in order:
+router.Use(middleware.CorrelationID())        // Request tracing
+router.Use(middleware.StructuredLogging())    // JSON logging
+router.Use(middleware.RequestTimeout())       // Timeout handling
+router.Use(middleware.ErrorHandler())         // Panic recovery
+router.Use(middleware.ValidationErrorHandler()) // Input validation
+router.Use(middleware.InputValidation())      // XSS/SQL injection prevention
+router.Use(middleware.CORS())                 // Cross-origin requests
+router.Use(middleware.SecureHeaders())        // Security headers
+router.Use(middleware.RequestSizeLimit(1MB))  // DoS protection
+router.Use(middleware.CSRF(redisClient))      // CSRF protection
 ```
 
-#### Rate Limiting Middleware
+#### Enhanced Rate Limiting
 ```go
 func RateLimit(redisClient *redis.Client, requests int, window time.Duration) gin.HandlerFunc {
     return func(c *gin.Context) {
         clientIP := c.ClientIP()
-        key := fmt.Sprintf("rate_limit:%s", clientIP)
         
-        // Check current request count
-        current, err := redisClient.Get(ctx, key).Int()
-        
-        if current >= requests {
+        // IP-based rate limiting
+        ipKey := fmt.Sprintf("rate_limit:ip:%s", clientIP)
+        if !checkRateLimit(ctx, redisClient, ipKey, requests, window) {
             c.JSON(http.StatusTooManyRequests, gin.H{
-                "error": "Rate limit exceeded",
+                "error": "Rate limit exceeded for IP",
                 "retry_after": window.Seconds(),
             })
             c.Abort()
             return
         }
         
-        // Increment counter with expiration
-        pipe := redisClient.Pipeline()
-        pipe.Incr(ctx, key)
-        pipe.Expire(ctx, key, window)
-        pipe.Exec(ctx)
+        // User-based rate limiting (if authenticated)
+        if userID, exists := c.Get("userID"); exists {
+            userKey := fmt.Sprintf("rate_limit:user:%v", userID)
+            if !checkRateLimit(ctx, redisClient, userKey, requests*2, window) {
+                c.JSON(http.StatusTooManyRequests, gin.H{
+                    "error": "Rate limit exceeded for user",
+                })
+                c.Abort()
+                return
+            }
+        }
+        
+        c.Next()
+    }
+}
+```
+
+#### CSRF Protection
+```go
+func CSRF(redisClient *redis.Client) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        if c.Request.Method == "GET" || c.Request.Method == "HEAD" {
+            c.Next()
+            return
+        }
+        
+        token := c.GetHeader("X-CSRF-Token")
+        if token == "" {
+            c.JSON(http.StatusForbidden, gin.H{"error": "CSRF token required"})
+            c.Abort()
+            return
+        }
+        
+        // Validate token in Redis
+        key := "csrf:" + token
+        exists, err := redisClient.Exists(ctx, key).Result()
+        if err != nil || exists == 0 {
+            c.JSON(http.StatusForbidden, gin.H{"error": "Invalid CSRF token"})
+            c.Abort()
+            return
+        }
         
         c.Next()
     }
@@ -509,7 +534,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 ### 8. Utilities (`internal/utils/`)
 
-#### Password Utilities
+#### Enhanced Password Utilities
 ```go
 func HashPassword(password string, cost int) (string, error) {
     bytes, err := bcrypt.GenerateFromPassword([]byte(password), cost)
@@ -519,9 +544,33 @@ func HashPassword(password string, cost int) (string, error) {
 func CheckPassword(password, hash string) error {
     return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 }
+
+// Password complexity validation
+func ValidatePassword(password string) error {
+    if len(password) < 8 {
+        return ErrPasswordTooShort
+    }
+    
+    var hasUpper, hasLower, hasDigit, hasSpecial bool
+    for _, char := range password {
+        switch {
+        case unicode.IsUpper(char): hasUpper = true
+        case unicode.IsLower(char): hasLower = true
+        case unicode.IsDigit(char): hasDigit = true
+        case unicode.IsPunct(char) || unicode.IsSymbol(char): hasSpecial = true
+        }
+    }
+    
+    if !hasUpper { return ErrPasswordNoUpper }
+    if !hasLower { return ErrPasswordNoLower }
+    if !hasDigit { return ErrPasswordNoDigit }
+    if !hasSpecial { return ErrPasswordNoSpecial }
+    
+    return nil
+}
 ```
 
-#### Validation Utilities
+#### Enhanced Validation Utilities
 ```go
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
@@ -531,6 +580,16 @@ func IsValidEmail(email string) bool {
 
 func NormalizeEmail(email string) string {
     return strings.ToLower(strings.TrimSpace(email))
+}
+
+// XSS and injection prevention
+func SanitizeInput(input string) string {
+    input = strings.ReplaceAll(input, "<", "")
+    input = strings.ReplaceAll(input, ">", "")
+    input = strings.ReplaceAll(input, "&", "")
+    input = strings.ReplaceAll(input, "\"", "")
+    input = strings.ReplaceAll(input, "'", "")
+    return strings.TrimSpace(input)
 }
 ```
 
@@ -560,6 +619,29 @@ func NormalizeEmail(email string) string {
 - **Input validation** and sanitization
 - **SQL injection protection** via prepared statements
 
+## 🔨 Build & Development
+
+### Quick Commands (Makefile)
+```bash
+# Build the application
+make build
+
+# Run tests with coverage
+make test-coverage
+
+# Start development environment
+make docker-up
+
+# Run database migrations
+make migrate-up
+
+# Security scan
+make security
+
+# Full CI pipeline
+make ci
+```
+
 ## 🐳 Docker Deployment
 
 ### Development
@@ -572,6 +654,9 @@ docker-compose logs -f app
 
 # Execute commands in container
 docker-compose exec app sh
+
+# Check service status
+docker-compose ps
 ```
 
 ### Production Considerations
@@ -583,20 +668,39 @@ docker-compose exec app sh
 
 ## 🧪 Testing
 
+### Automated Testing
+```bash
+# Run all tests
+make test
+
+# Run tests with coverage
+make test-coverage
+
+# Run specific test suites
+go test -v ./internal/utils/     # Unit tests
+go test -v ./tests/              # Integration tests
+```
+
 ### Manual Testing
 ```bash
-# Health check
-curl http://localhost:8080/health
+# Health checks
+curl http://localhost:8080/health        # Full health check
+curl http://localhost:8080/health/ready  # Readiness probe
+curl http://localhost:8080/health/live   # Liveness probe
 
-# Register user
+# Register user (with password complexity)
 curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"password123"}'
+  -d '{"email":"test@example.com","password":"SecurePass123!"}'
 
-# Login
+# Login and get tokens
 curl -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"password123"}'
+  -d '{"email":"test@example.com","password":"SecurePass123!"}'
+
+# Access protected endpoint
+curl -X GET http://localhost:8080/api/profile \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 ### Load Testing
@@ -604,25 +708,64 @@ curl -X POST http://localhost:8080/auth/login \
 # Install hey
 go install github.com/rakyll/hey@latest
 
-# Test registration endpoint
-hey -n 1000 -c 10 -m POST -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"password123"}' \
+# Test with rate limiting
+hey -n 100 -c 5 -m POST -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"SecurePass123!"}' \
   http://localhost:8080/auth/register
+```
+
+### Security Testing
+```bash
+# Test CSRF protection
+curl -X POST http://localhost:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"SecurePass123!"}'
+# Should return 403 without CSRF token
+
+# Test rate limiting
+for i in {1..15}; do curl http://localhost:8080/health; done
+# Should return 429 after 10 requests
 ```
 
 ## 📊 Monitoring & Observability
 
-### Health Checks
-- **Application health**: `/health` endpoint
-- **Database connectivity**: PostgreSQL ping
-- **Cache connectivity**: Redis ping
-- **Docker health checks**: Built into containers
+### Enhanced Health Checks
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "services": {
+    "database": "healthy",
+    "redis": "healthy",
+    "database_query": "healthy"
+  },
+  "version": "1.0.0"
+}
+```
 
-### Logging
-- **Structured logging** with request IDs
-- **Authentication events** logging
-- **Error tracking** and alerting
-- **Performance metrics**
+### Structured Logging
+```json
+{
+  "correlation_id": "123e4567-e89b-12d3-a456-426614174000",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "level": "info",
+  "message": "HTTP Request",
+  "status": 200,
+  "latency": "15.2ms",
+  "client_ip": "192.168.1.1",
+  "method": "POST",
+  "path": "/auth/login",
+  "user_agent": "curl/7.68.0"
+}
+```
+
+### Security Event Logging
+- **Authentication events**: Login success/failure with correlation IDs
+- **Rate limiting**: IP and user-based limit violations
+- **CSRF attempts**: Invalid token submissions
+- **Input validation**: XSS and SQL injection attempts
+- **Account lockouts**: Failed login attempt tracking
+- **Token events**: Generation, validation, and revocation
 
 ## 🚀 Production Deployment
 
@@ -632,16 +775,29 @@ hey -n 1000 -c 10 -m POST -H "Content-Type: application/json" \
 3. **Set up SSL/TLS** certificates
 4. **Configure reverse proxy** (NGINX/Traefik)
 5. **Set up monitoring** (Prometheus/Grafana)
+6. **Configure security settings** in `.env`:
+   ```env
+   ACCOUNT_LOCKOUT_DURATION=30m
+   MAX_FAILED_ATTEMPTS=5
+   PASSWORD_COMPLEXITY=true
+   CSRF_PROTECTION=true
+   REQUEST_TIMEOUT=30s
+   ```
 
 ### Security Checklist
-- [ ] Change default JWT secret
-- [ ] Enable HTTPS/TLS
+- [ ] Change default JWT secret (`JWT_SECRET`)
+- [ ] Enable HTTPS/TLS with proper certificates
 - [ ] Configure CORS for production domains
-- [ ] Set up rate limiting
-- [ ] Enable email verification
-- [ ] Configure secure headers
-- [ ] Set up log monitoring
-- [ ] Regular security updates
+- [ ] Set up rate limiting (IP + user-based)
+- [ ] Enable CSRF protection (`CSRF_PROTECTION=true`)
+- [ ] Configure password complexity (`PASSWORD_COMPLEXITY=true`)
+- [ ] Set account lockout parameters (`MAX_FAILED_ATTEMPTS`, `ACCOUNT_LOCKOUT_DURATION`)
+- [ ] Enable email verification with SMTP
+- [ ] Configure security headers (HSTS, CSP, X-Frame-Options)
+- [ ] Set up structured logging with correlation IDs
+- [ ] Configure request timeouts and size limits
+- [ ] Set up log monitoring and alerting
+- [ ] Regular security updates and dependency scanning
 
 ## 🤝 Contributing
 
@@ -692,6 +848,41 @@ docker-compose exec redis redis-cli ping
 3. Ensure Redis is accessible
 4. Review token format in requests
 
+#### CSRF Protection Issues
+```bash
+# Generate CSRF token
+curl -X GET http://localhost:8080/csrf-token
+
+# Use token in requests
+curl -X POST http://localhost:8080/auth/register \
+  -H "X-CSRF-Token: YOUR_CSRF_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"SecurePass123!"}'
+```
+
+#### Rate Limiting Issues
+1. Check Redis connection and keys: `redis-cli KEYS "rate_limit:*"`
+2. Verify rate limit configuration in `.env`
+3. Monitor rate limit headers in responses
+4. Check IP-based vs user-based limits
+
+#### Password Complexity Errors
+```bash
+# Valid password format
+{
+  "password": "SecurePass123!"  # 8+ chars, upper, lower, digit, special
+}
+```
+
+#### Correlation ID Tracking
+```bash
+# Add correlation ID to requests
+curl -H "X-Correlation-ID: custom-trace-id" http://localhost:8080/health
+
+# Check logs for correlation ID
+docker-compose logs app | grep "custom-trace-id"
+```
+
 ### Performance Optimization
 
 #### Database
@@ -714,4 +905,4 @@ docker-compose exec redis redis-cli ping
 
 ---
 
-**Built with ❤️ Flack**
+**Built with ❤️ By Flack**

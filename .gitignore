@@ -57,5 +57,5 @@ email_verify_token.txt
 Makefile
 
 # Scripts
-inspect_ath.sh 
+inspect_auth.sh 
 test_endpoints.sh

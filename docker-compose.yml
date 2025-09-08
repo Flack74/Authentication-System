@@ -5,16 +5,11 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=authuser
-      - DB_PASSWORD=authpassword
-      - DB_NAME=authdb
-      - DB_SSLMODE=disable
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
     depends_on:
       postgres:
         condition: service_healthy
