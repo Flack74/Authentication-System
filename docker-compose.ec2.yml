@@ -14,6 +14,18 @@ services:
     restart: unless-stopped
     mem_limit: 50m
 
+  migrate:
+    image: migrate/migrate
+    volumes:
+      - ./migrations:/migrations
+    command: ["-path", "/migrations", "-database", "postgres://authuser:authpassword@postgres:5432/authdb?sslmode=disable", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - auth-network
+    restart: "no"
+
   app:
     build:
       context: .
@@ -31,6 +43,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - auth-network
     restart: unless-stopped
@@ -50,6 +64,11 @@ services:
     restart: unless-stopped
     mem_limit: 200m
     command: postgres -c shared_buffers=32MB -c effective_cache_size=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authuser -d authdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -60,6 +79,11 @@ services:
     restart: unless-stopped
     mem_limit: 50m
     command: redis-server --maxmemory 32mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
