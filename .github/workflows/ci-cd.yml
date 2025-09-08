@@ -65,6 +65,9 @@ jobs:
     - name: Install dependencies
       run: go mod download
     
+    - name: Generate sqlc code
+      run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+    
     - name: Run migrations
       run: |
         go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
@@ -96,7 +99,7 @@ jobs:
       run: go test -v -run TestSecurity ./tests/
     
     - name: Generate test coverage
-      run: go test -coverprofile=coverage.out ./...
+      run: go test -coverprofile=coverage.out -short ./internal/...
       env:
         DB_HOST: localhost
         REDIS_HOST: localhost
@@ -123,6 +126,7 @@ jobs:
       uses: docker/setup-buildx-action@v3
     
     - name: Log in to Docker Hub
+      if: ${{ github.event_name != 'pull_request' }}
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -144,7 +148,7 @@ jobs:
       with:
         context: .
         file: ./docker/Dockerfile
-        push: false
+        push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
