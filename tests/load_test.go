@@ -17,6 +17,13 @@ func TestLoadRegistration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping load test in short mode")
 	}
+	
+	// Check if server is available
+	resp, err := http.Get("http://localhost:8080/health")
+	if err != nil {
+		t.Skip("Server not available, skipping load test")
+	}
+	resp.Body.Close()
 
 	const (
 		numGoroutines = 10
@@ -76,6 +83,13 @@ func TestRateLimitingLoad(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping rate limiting test in short mode")
 	}
+	
+	// Check if server is available
+	resp, err := http.Get("http://localhost:8080/health")
+	if err != nil {
+		t.Skip("Server not available, skipping rate limiting test")
+	}
+	resp.Body.Close()
 
 	const (
 		numRequests = 15

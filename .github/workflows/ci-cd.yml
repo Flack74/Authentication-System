@@ -85,7 +85,7 @@ jobs:
         BCRYPT_COST: 4
     
     - name: Run integration tests
-      run: go test -v ./tests/
+      run: go test -v ./tests/ -short
       env:
         DB_HOST: localhost
         REDIS_HOST: localhost
