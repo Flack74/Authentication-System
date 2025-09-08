@@ -655,7 +655,7 @@ docker-compose up -d
 1. Run unit & integration tests
 2. Security scanning (Trivy + gosec)
 3. Build Docker image
-4. Push to Docker Hub (flack74/go-auth-system)
+4. Push to Docker Hub (flack74621/go-auth-system)
 5. Manual deployment trigger available
 ```
 

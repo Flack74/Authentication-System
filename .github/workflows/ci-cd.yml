@@ -15,7 +15,7 @@ on:
       - '*.md'
 
 env:
-  IMAGE_NAME: flack74/go-auth-system
+  IMAGE_NAME: flack74621/go-auth-system
 
 jobs:
   test:
