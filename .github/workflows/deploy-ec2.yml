@@ -1,0 +1,59 @@
+name: Deploy to EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ec2-user
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        script: |
+          # Navigate to app directory
+          cd /home/ec2-user/Authentication_System || {
+            echo "Cloning repository..."
+            git clone https://github.com/${{ github.repository }}.git
+            cd Authentication_System
+          }
+          
+          # Pull latest changes
+          git pull origin main
+          
+          # Pull latest Docker image
+          docker pull flack74/go-auth-system:latest
+          
+          # Stop existing containers
+          docker-compose -f docker-compose.ec2.yml down
+          
+          # Start with latest image
+          docker-compose -f docker-compose.ec2.yml up -d
+          
+          # Wait for health check
+          sleep 30
+          
+          # Verify deployment
+          curl -f http://localhost:8080/health || exit 1
+          
+          echo "Deployment completed successfully!"
+    
+    - name: Verify deployment
+      run: |
+        echo "Deployment to ${{ github.event.inputs.environment }} completed"
+        echo "Application should be available at: https://${{ secrets.EC2_HOST }}"

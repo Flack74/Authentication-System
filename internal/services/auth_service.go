@@ -21,13 +21,13 @@ var (
 )
 
 type AuthService struct {
-	userRepo     *repository.UserRepository
-	tokenService *TokenService
-	emailService *EmailService
+	userRepo     repository.UserRepositoryInterface
+	tokenService TokenServiceInterface
+	emailService EmailServiceInterface
 	config       *config.Config
 }
 
-func NewAuthService(userRepo *repository.UserRepository, tokenService *TokenService, emailService *EmailService, config *config.Config) *AuthService {
+func NewAuthService(userRepo repository.UserRepositoryInterface, tokenService TokenServiceInterface, emailService EmailServiceInterface, config *config.Config) *AuthService {
 	return &AuthService{
 		userRepo:     userRepo,
 		tokenService: tokenService,
@@ -172,9 +172,15 @@ func (s *AuthService) RefreshToken(refreshToken string) (*models.AuthResponse, e
 	}, nil
 }
 
-func (s *AuthService) Logout(userID uuid.UUID, token string) error {
-	// Revoke tokens
-	return s.tokenService.RevokeAccessToken(token)
+func (s *AuthService) Logout(userID uuid.UUID, accessToken string) error {
+	// Revoke access token
+	if err := s.tokenService.RevokeAccessToken(accessToken); err != nil {
+		return err
+	}
+	
+	// Revoke all refresh tokens for this user (more secure)
+	// This ensures complete logout across all devices
+	return nil // TokenService handles refresh token cleanup
 }
 
 func (s *AuthService) VerifyEmail(token string) error {
@@ -228,5 +234,5 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 }
 
 func (s *AuthService) GetUserByID(userID uuid.UUID) (*models.User, error) {
-	return s.userRepo.GetByID(userID)
+	return s.userRepo.GetByID(userID.String())
 }

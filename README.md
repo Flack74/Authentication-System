@@ -41,41 +41,49 @@ Authentication_System/
 ├── cmd/api/                    # Application entry point
 ├── internal/                   # Private application code
 │   ├── config/                 # Configuration management
+│   ├── db/                     # sqlc generated code
+│   │   └── queries/            # SQL queries for sqlc
 │   ├── databases/              # Database connections
 │   ├── handlers/               # HTTP request handlers (auth + health)
 │   ├── middleware/             # HTTP middleware (auth, CORS, CSRF, logging)
 │   ├── models/                 # Data models and DTOs
-│   ├── repository/             # Data access layer
+│   ├── repository/             # Data access layer (sqlc-based)
 │   ├── services/               # Business logic layer
 │   └── utils/                  # Utility functions
 ├── migrations/                 # Database migrations with indexes
-├── tests/                      # Integration and unit tests
-├── docs/screenshots/           # Documentation screenshots
-├── docker-compose.yml          # Multi-container setup
-├── Makefile                    # Build automation
+├── nginx/                      # NGINX configuration for production
+├── .github/workflows/          # CI/CD pipelines
+├── docker-compose.yml          # Development setup
+├── docker-compose.prod.yml     # Production setup
+├── docker-compose.ec2.yml      # EC2 optimized setup
+├── sqlc.yaml                   # sqlc configuration
 └── README.md                   # This file
 ```
 
 ## ✨ Features
 
 ### Core Authentication
-- **User Registration** with email verification
+- **User Registration** with email verification and normalization
 - **Secure Login** with bcrypt password hashing (cost 12+)
-- **JWT Tokens** (short-lived access + long-lived refresh)
-- **Token Refresh** with automatic rotation
-- **Secure Logout** with token revocation
+- **JWT Authentication**: Short-lived access + long-lived refresh tokens
+- **Token Refresh** with automatic rotation and blacklisting
+- **Secure Logout** with complete token revocation
 - **Password Reset** via email with time-limited tokens
+- **Email Verification** flow with secure tokens
 
 ### Security Features
 - **Rate Limiting** per IP and per user using Redis sliding window
-- **Account Lockout** after configurable failed login attempts
+- **Account Lockout** after 5 failed attempts (30min lockout)
 - **CORS Protection** with configurable origins
 - **CSRF Protection** with Redis-based token validation
 - **Security Headers** (HSTS, CSP, XSS Protection, X-Frame-Options)
 - **Input Validation** with SQL injection and XSS prevention
-- **Password Complexity** rules (uppercase, lowercase, digit, special char)
+- **Authorization Header XSS Protection** for SPA clients
+- **HttpOnly, Secure, SameSite=strict** cookies
+- **Password Complexity** validation and strong secret enforcement
 - **Request Size Limiting** and timeout handling
-- **Structured Logging** with correlation IDs for security auditing
+- **Structured Logging** with correlation IDs (no secrets logged)
+- **sqlc Type Safety** preventing SQL injection at compile-time
 
 ### Infrastructure
 - **PostgreSQL** for persistent data storage
@@ -90,11 +98,13 @@ Authentication_System/
 |-----------|------------|---------|
 | **Framework** | Gin | HTTP web framework |
 | **Database** | PostgreSQL | Primary data store |
+| **ORM/SQL** | sqlc | Type-safe SQL code generation |
 | **Cache** | Redis | Session store & rate limiting |
-| **Auth** | JWT | Stateless authentication |
-| **Password** | bcrypt | Secure password hashing |
+| **Auth** | JWT | Stateless authentication with refresh tokens |
+| **Password** | bcrypt | Secure password hashing (cost 12+) |
 | **Email** | SMTP/Gomail | Email notifications |
 | **Containerization** | Docker | Deployment & development |
+| **Proxy** | NGINX | TLS termination & load balancing |
 
 ## 📋 Prerequisites
 
@@ -621,25 +631,32 @@ func SanitizeInput(input string) string {
 
 ## 🔨 Build & Development
 
-### Quick Commands (Makefile)
+### Local Development
 ```bash
-# Build the application
-make build
+# Install dependencies
+go mod download
 
-# Run tests with coverage
-make test-coverage
+# Generate sqlc code
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+
+# Build application
+go build -o bin/auth cmd/api/main.go
+
+# Run tests
+go test -v ./...
 
 # Start development environment
-make docker-up
+docker-compose up -d
+```
 
-# Run database migrations
-make migrate-up
-
-# Security scan
-make security
-
-# Full CI pipeline
-make ci
+### CI/CD Pipeline
+```bash
+# Automated on every push to main:
+1. Run unit & integration tests
+2. Security scanning (Trivy + gosec)
+3. Build Docker image
+4. Push to Docker Hub (flack74/go-auth-system)
+5. Manual deployment trigger available
 ```
 
 ## 🐳 Docker Deployment
@@ -659,12 +676,33 @@ docker-compose exec app sh
 docker-compose ps
 ```
 
+### Production on EC2
+```bash
+# 1. Launch EC2 t2.micro (free tier)
+# 2. Install Docker & Docker Compose
+sudo yum update -y
+sudo yum install -y docker
+sudo service docker start
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# 3. Deploy with production config
+git clone https://github.com/your-username/Authentication_System.git
+cd Authentication_System
+cp .env .env.prod  # Edit with production values
+docker-compose -f docker-compose.ec2.yml up -d
+
+# 4. Setup SSL with Let's Encrypt
+sudo yum install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d flack74.site
+```
+
 ### Production Considerations
-1. **Use secrets management** for sensitive environment variables
-2. **Configure TLS termination** at load balancer level
-3. **Set up monitoring** and health checks
-4. **Use production-grade PostgreSQL** and Redis instances
-5. **Implement log aggregation**
+1. **Environment variables** managed via `.env.prod`
+2. **TLS termination** via NGINX with Let's Encrypt
+3. **Health checks** and monitoring built-in
+4. **Memory optimization** for t2.micro instances
+5. **Automated CI/CD** via GitHub Actions
 
 ## 🧪 Testing
 
@@ -769,35 +807,52 @@ for i in {1..15}; do curl http://localhost:8080/health; done
 
 ## 🚀 Production Deployment
 
-### Environment Setup
-1. **Generate strong JWT secret**: `openssl rand -base64 32`
-2. **Configure SMTP** for email delivery
-3. **Set up SSL/TLS** certificates
-4. **Configure reverse proxy** (NGINX/Traefik)
-5. **Set up monitoring** (Prometheus/Grafana)
-6. **Configure security settings** in `.env`:
-   ```env
-   ACCOUNT_LOCKOUT_DURATION=30m
-   MAX_FAILED_ATTEMPTS=5
-   PASSWORD_COMPLEXITY=true
-   CSRF_PROTECTION=true
-   REQUEST_TIMEOUT=30s
-   ```
+### EC2 Production Setup
+1. **Domain Configuration**: Point `flack74.site` to EC2 IP
+2. **Environment Variables**: Create `.env.prod` with production values
+3. **SSL Certificate**: Free Let's Encrypt via Certbot
+4. **NGINX Proxy**: TLS termination and security headers
+5. **Docker Deployment**: `docker-compose -f docker-compose.ec2.yml up -d`
+
+### Production Environment Variables
+```env
+# Required changes for production
+ENV=production
+JWT_SECRET=your-strong-production-secret
+SMTP_PASS=your-gmail-app-password
+CSRF_PROTECTION=true
+PASSWORD_COMPLEXITY=true
+ACCOUNT_LOCKOUT_DURATION=30m
+MAX_FAILED_ATTEMPTS=5
+```
+
+### Deployment Workflow
+```bash
+# Manual deployment via GitHub Actions:
+1. Go to GitHub → Actions → "Deploy to EC2"
+2. Click "Run workflow"
+3. Select environment (staging/production)
+4. Deployment automatically:
+   - Pulls latest code
+   - Updates Docker image
+   - Restarts services
+   - Runs health checks
+```
 
 ### Security Checklist
-- [ ] Change default JWT secret (`JWT_SECRET`)
-- [ ] Enable HTTPS/TLS with proper certificates
-- [ ] Configure CORS for production domains
-- [ ] Set up rate limiting (IP + user-based)
-- [ ] Enable CSRF protection (`CSRF_PROTECTION=true`)
-- [ ] Configure password complexity (`PASSWORD_COMPLEXITY=true`)
-- [ ] Set account lockout parameters (`MAX_FAILED_ATTEMPTS`, `ACCOUNT_LOCKOUT_DURATION`)
-- [ ] Enable email verification with SMTP
-- [ ] Configure security headers (HSTS, CSP, X-Frame-Options)
-- [ ] Set up structured logging with correlation IDs
-- [ ] Configure request timeouts and size limits
-- [ ] Set up log monitoring and alerting
-- [ ] Regular security updates and dependency scanning
+- [x] sqlc for type-safe SQL (compile-time protection)
+- [x] bcrypt password hashing (cost 12+)
+- [x] JWT + session-based authentication
+- [x] HttpOnly, Secure, SameSite=strict cookies
+- [x] Rate limiting (IP + user-based)
+- [x] Account lockout (5 attempts, 30min)
+- [x] CSRF protection enabled
+- [x] XSS protection (input validation + headers)
+- [x] HTTPS/TLS with NGINX + Let's Encrypt
+- [x] Security headers (HSTS, CSP, X-Frame-Options)
+- [x] Configuration validation
+- [x] Structured logging (no secrets)
+- [x] Token revocation and blacklisting
 
 ## 🤝 Contributing
 

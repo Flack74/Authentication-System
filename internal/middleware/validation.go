@@ -49,26 +49,31 @@ func validateInput(field, value string) error {
 	
 	// Check for SQL injection patterns
 	if sqlInjectionPattern.MatchString(strings.ToLower(sanitized)) {
-		return gin.Error{Err: fmt.Errorf("potential SQL injection in field %s", field)}
+		return fmt.Errorf("potential SQL injection in field %s", field)
 	}
 	
 	// Check for XSS patterns
 	if xssPattern.MatchString(strings.ToLower(sanitized)) {
-		return gin.Error{Err: fmt.Errorf("potential XSS in field %s", field)}
+		return fmt.Errorf("potential XSS in field %s", field)
+	}
+	
+	// Check field length
+	if len(value) > 1000 {
+		return fmt.Errorf("field %s exceeds maximum length", field)
 	}
 	
 	return nil
 }
 
-func EmailValidation() gin.HandlerFunc {
+func PasswordComplexityValidation() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method == "POST" {
+		if c.Request.Method == "POST" && (c.FullPath() == "/auth/register" || c.FullPath() == "/auth/password/reset") {
 			var body map[string]interface{}
 			if err := c.ShouldBindJSON(&body); err == nil {
-				if email, exists := body["email"]; exists {
-					if emailStr, ok := email.(string); ok {
-						if !utils.IsValidEmail(emailStr) {
-							c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid email format"})
+				if password, exists := body["password"]; exists {
+					if passwordStr, ok := password.(string); ok {
+						if err := utils.ValidatePassword(passwordStr); err != nil {
+							c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 							c.Abort()
 							return
 						}

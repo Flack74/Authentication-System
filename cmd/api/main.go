@@ -29,8 +29,13 @@ func main() {
 
 	// Load configuration
 	cfg := config.Load()
+	
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		log.Fatal("Configuration validation failed:", err)
+	}
 
-	// Initialize database
+	// Initialize PostgreSQL database
 	db, err := databases.NewPostgresDB(cfg)
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
@@ -41,8 +46,8 @@ func main() {
 	redisClient := databases.NewRedisClient(cfg)
 	defer redisClient.Close()
 
-	// Initialize repositories
-	userRepo := repository.NewUserRepository(db)
+	// Initialize sqlc repositories
+	userRepo := repository.NewSqlcUserRepository(db)
 
 	// Initialize services
 	tokenService := services.NewTokenService(cfg, redisClient)

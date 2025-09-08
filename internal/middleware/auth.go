@@ -16,6 +16,13 @@ func Auth(tokenService *services.TokenService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		
+		// XSS protection: sanitize authorization header
+		if len(authHeader) > 1000 || strings.Contains(authHeader, "<") || strings.Contains(authHeader, ">") {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization header"})
+			c.Abort()
+			return
+		}
 
 		tokenParts := strings.Split(authHeader, " ")
 		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
