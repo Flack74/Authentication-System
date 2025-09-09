@@ -49,6 +49,8 @@ Thumbs.db
 # Documentation
 ENDPOINTS_STATUS.md
 IMPLEMENTATION_GUIDE.md
+ARCHITECTURE.md
+DEVELOPMENT_GUIDE.md
 
 # Text file
 email_verify_token.txt
@@ -59,3 +61,5 @@ Makefile
 # Scripts
 inspect_auth.sh 
 test_endpoints.sh
+
+
