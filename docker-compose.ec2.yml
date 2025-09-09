@@ -33,7 +33,7 @@ services:
     expose:
       - "8080"
     env_file:
-      - .env.prod
+      - .env.ec2
     environment:
       - DB_HOST=postgres
       - REDIS_HOST=redis
@@ -66,9 +66,10 @@ services:
     command: postgres -c shared_buffers=32MB -c effective_cache_size=128MB
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U authuser -d authdb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
