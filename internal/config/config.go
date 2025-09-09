@@ -36,6 +36,7 @@ type Config struct {
 	SMTPUser     string
 	SMTPPassword string
 	EmailFrom    string
+	BaseURL      string
 
 	// Security
 	BcryptCost        int
@@ -75,6 +76,7 @@ func Load() *Config {
 		SMTPUser:     getEnv("SMTP_USER", ""),
 		SMTPPassword: getEnv("SMTP_PASS", ""),
 		EmailFrom:    getEnv("EMAIL_FROM", "noreply@example.com"),
+		BaseURL:      getEnv("BASE_URL", "http://localhost:8080"),
 
 		BcryptCost:             getEnvAsInt("BCRYPT_COST", 12),
 		RateLimitRequests:      getEnvAsInt("RATE_LIMIT_REQUESTS", 10),

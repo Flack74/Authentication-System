@@ -17,7 +17,7 @@ func NewEmailService(config *config.Config) *EmailService {
 
 func (s *EmailService) SendVerificationEmail(email, token string) error {
 	subject := "Verify Your Email Address"
-	verifyURL := fmt.Sprintf("http://localhost:%s/auth/verify?token=%s", s.config.Port, token)
+	verifyURL := fmt.Sprintf("%s/auth/verify?token=%s", s.config.BaseURL, token)
 	
 	body := fmt.Sprintf(`
 		<h2>Email Verification</h2>
@@ -31,7 +31,7 @@ func (s *EmailService) SendVerificationEmail(email, token string) error {
 
 func (s *EmailService) SendPasswordResetEmail(email, token string) error {
 	subject := "Password Reset Request"
-	resetURL := fmt.Sprintf("http://localhost:%s/auth/password/reset?token=%s", s.config.Port, token)
+	resetURL := fmt.Sprintf("%s/auth/password/reset?token=%s", s.config.BaseURL, token)
 	
 	body := fmt.Sprintf(`
 		<h2>Password Reset</h2>
