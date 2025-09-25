@@ -17,7 +17,7 @@
 
 *Secure • Scalable • Production-Ready*
 
-[Features](#-features) • [Quick Start](#-quick-start) • [API Documentation](#-api-endpoints) • [Security](#-security-implementation) • [Screenshots](#-screenshots)
+[Features](#-features) • [Quick Start](#-quick-start) • [API Documentation](#-api-endpoints) • [Security](#-security-implementation)
 
 </div>
 
